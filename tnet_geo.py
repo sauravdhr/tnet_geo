@@ -20,14 +20,17 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 # Library imports
 from Bio import Phylo
+from collections import Counter
 from csv import DictReader
 import numpy as np
 import copy, sys, os
-import argparse
+import argparse, json
 
 # Global variables
 args = None
 strain_country = {}
+node_name_date = {}
+leaf_strain = {}
 hosts = []
 score = {}
 left_score = {}
@@ -44,27 +47,26 @@ def initialize_tree(input_file):
 
 	return input_tree
 
-def initialize_leaf_nodes(rooted_tree):
-	# reading metadata to strain_country
-	if args.metadata:
-		with open(args.metadata, 'r') as read_obj:
-			csv_dict_reader = DictReader(read_obj)
-			for row in csv_dict_reader:
+def read_metadata_initialize_global_variables():
+	with open(args.metadata, 'r') as read_obj:
+		csv_dict_reader = DictReader(read_obj)
+		for row in csv_dict_reader:
+			node_name_date[row['strain']] = row['date']
+			if row['country']:
 				strain_country[row['strain']] = row['country'].replace(' ', '')
 
-	temp_host = []
+def initialize_leaf_nodes(rooted_tree):
+	global hosts
 
 	for terminal in rooted_tree.get_terminals():
+		leaf_strain[terminal] = terminal.name
 		if args.metadata:
 			terminal.name = strain_country[terminal.name]
 		else:
 			terminal.name = terminal.name.split('_')[0]
 
-		if terminal.name not in temp_host:
-			temp_host.append(terminal.name)
-
-	global hosts
-	hosts = temp_host.copy()
+		if terminal.name not in hosts:
+			hosts.append(terminal.name)
 
 	for terminal in rooted_tree.get_terminals():
 		temp = []
@@ -131,7 +133,6 @@ def get_host_from_count(count):
 				count[i] = 0
 
 	probs = [float(i)/sum(count) for i in count]
-	np.random.seed(args.seed)
 	ch = np.random.choice(len(probs), p = probs)
 	return hosts[ch]
 
@@ -204,10 +205,27 @@ def choose_internal_node_host_with_bias(rooted_tree):
 
 				nonterminal.clades[1].name = get_host_from_count(r_count)
 
-def get_labeled_trees(rooted_tree):
+def get_labeled_trees_json_data(rooted_tree):
+	# for hosding the labeled trees
 	labeled_trees = []
-	sample_times = 1 if not args.times else args.times
+	# for holding the json data
+	data = {}
+	data['Country of exposure'] = {}
+	data['Transmission edges'] = {}
+	data['Dated edges'] = []
 
+	# store the dates for all the nodes
+	node_date = {}
+	exposure = {}
+	transmission_edges = []
+	for node in rooted_tree.get_terminals():
+		node_date[node] = node_name_date[leaf_strain[node]]
+		exposure[leaf_strain[node]] = []
+
+	for node in rooted_tree.get_nonterminals():
+		node_date[node] = node_name_date[node.name]
+
+	sample_times = 1 if not args.times else args.times
 	for i in range(sample_times):
 		rooted_tree.root.name = choose_root_host(rooted_tree.root)
 
@@ -218,7 +236,31 @@ def get_labeled_trees(rooted_tree):
 
 		labeled_trees.append(copy.deepcopy(rooted_tree))
 
-	return labeled_trees
+		# filling the json data
+		temp_edges = []
+		for nonterminal in rooted_tree.get_nonterminals(order = 'preorder'):
+			for clade in nonterminal.clades:
+				if nonterminal.name != clade.name:
+					transmission_edge = nonterminal.name + '->' + clade.name
+					data['Dated edges'].append([transmission_edge, node_date[nonterminal]])
+					temp_edges.append(transmission_edge)
+				if clade.is_terminal():
+					exposure[leaf_strain[clade]].append(nonterminal.name)
+
+		temp_edges = list(set(temp_edges))
+		transmission_edges.extend(temp_edges)
+
+	data['Transmission edges'] = dict(Counter(transmission_edges))
+	for strain, countries in exposure.items():
+		country_count = dict(Counter(countries))
+		data['Country of exposure'][strain] = {'count': country_count, 'country': max(country_count, key=country_count.get)}
+
+	return labeled_trees, data
+
+def create_json_extradata(json_data):
+	output_json = args.OUTPUT_FILE + '.json'
+	with open(output_json, 'w') as outfile:
+		json.dump(json_data, outfile)
 
 def parse_arguments():
 	parser = argparse.ArgumentParser(description = 'Process TNet-Geo arguments.')
@@ -229,6 +271,7 @@ def parse_arguments():
 	parser.add_argument('-bs', '--biasedsampling', default = False, action = 'store_true', help = 'sample optimal solutions with back transmission bias')
 	parser.add_argument('-t', '--times', default = None, type = int, help = 'sample TNet multiple times')
 	parser.add_argument('-mx', '--maxprob', default = False, action = 'store_true', help = 'compute highest-probability solution')
+	parser.add_argument('-ex', '--extradata', default = False, action = 'store_true', help = 'output a json file with extra output data for further analysis')
 	parser.add_argument('-v', '--version', action = 'version', version = 'You are using %(prog)s 1.0')
 	return parser.parse_args()
 
@@ -239,15 +282,21 @@ def main():
 
 	# initialize input_tree, hosts, score, solution_count
 	input_tree = initialize_tree(args.INPUT_TREE_FILE)
+	if args.metadata:
+		read_metadata_initialize_global_variables()
+
 	initialize_leaf_nodes(input_tree)
 	initialize_internal_nodes(input_tree)
 
 	# label internal nodes
-	labeled_trees = get_labeled_trees(input_tree)
+	np.random.seed(args.seed)
+	labeled_trees, json_data = get_labeled_trees_json_data(input_tree)
 
 	# create output files
 	Phylo.write(labeled_trees, args.OUTPUT_FILE, 'newick')
+	if args.extradata:
+		create_json_extradata(json_data)
 
 if __name__ == "__main__":
-	sys.setrecursionlimit(10000)
+	sys.setrecursionlimit(100000)
 	main()
