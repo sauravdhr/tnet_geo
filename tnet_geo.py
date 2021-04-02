@@ -218,12 +218,14 @@ def get_labeled_trees_json_data(rooted_tree):
 	node_date = {}
 	exposure = {}
 	transmission_edges = []
-	for node in rooted_tree.get_terminals():
-		node_date[node] = node_name_date[leaf_strain[node]]
-		exposure[leaf_strain[node]] = []
 
-	for node in rooted_tree.get_nonterminals():
-		node_date[node] = node_name_date[node.name]
+	if args.metadata:
+		for node in rooted_tree.get_terminals():
+			node_date[node] = node_name_date[leaf_strain[node]]
+			exposure[leaf_strain[node]] = []
+
+		for node in rooted_tree.get_nonterminals():
+			node_date[node] = node_name_date[node.name]
 
 	sample_times = 1 if not args.times else args.times
 	for i in range(sample_times):
@@ -236,24 +238,26 @@ def get_labeled_trees_json_data(rooted_tree):
 
 		labeled_trees.append(copy.deepcopy(rooted_tree))
 
-		# filling the json data
-		temp_edges = []
-		for nonterminal in rooted_tree.get_nonterminals(order = 'preorder'):
-			for clade in nonterminal.clades:
-				if nonterminal.name != clade.name:
-					transmission_edge = nonterminal.name + '->' + clade.name
-					data['Dated edges'].append([transmission_edge, node_date[nonterminal]])
-					temp_edges.append(transmission_edge)
-				if clade.is_terminal():
-					exposure[leaf_strain[clade]].append(nonterminal.name)
+		if args.metadata:
+			# filling the json data
+			temp_edges = []
+			for nonterminal in rooted_tree.get_nonterminals(order = 'preorder'):
+				for clade in nonterminal.clades:
+					if nonterminal.name != clade.name:
+						transmission_edge = nonterminal.name + '->' + clade.name
+						data['Dated edges'].append([transmission_edge, node_date[nonterminal]])
+						temp_edges.append(transmission_edge)
+					if clade.is_terminal():
+						exposure[leaf_strain[clade]].append(nonterminal.name)
 
-		temp_edges = list(set(temp_edges))
-		transmission_edges.extend(temp_edges)
+			temp_edges = list(set(temp_edges))
+			transmission_edges.extend(temp_edges)
 
-	data['Transmission edges'] = dict(Counter(transmission_edges))
-	for strain, countries in exposure.items():
-		country_count = dict(Counter(countries))
-		data['Country of exposure'][strain] = {'count': country_count, 'country': max(country_count, key=country_count.get)}
+	if args.metadata:
+		data['Transmission edges'] = dict(Counter(transmission_edges))
+		for strain, countries in exposure.items():
+			country_count = dict(Counter(countries))
+			data['Country of exposure'][strain] = {'count': country_count, 'country': max(country_count, key=country_count.get)}
 
 	return labeled_trees, data
 
@@ -266,11 +270,11 @@ def parse_arguments():
 	parser = argparse.ArgumentParser(description = 'Process TNet-Geo arguments.')
 	parser.add_argument('INPUT_TREE_FILE', action = 'store', type = str, help = 'input tree file name')
 	parser.add_argument('OUTPUT_FILE', action = 'store', type = str, help = 'output file name')
-	parser.add_argument('-md', '--metadata', default = None, type = str, help = 'csv table with meta data for the tree nodes')
+	parser.add_argument('-md', '--metadata', default = None, type = str, help = 'csv file with meta data for the tree nodes')
 	parser.add_argument('-sd', '--seed', default = None, type = int, help = 'random number generator seed')
-	parser.add_argument('-bs', '--biasedsampling', default = False, action = 'store_true', help = 'sample optimal solutions with back transmission bias')
-	parser.add_argument('-t', '--times', default = None, type = int, help = 'sample TNet multiple times')
+	parser.add_argument('-bs', '--biasedsampling', default = False, action = 'store_true', help = 'sample optimal solutions with minimum back-transmission')
 	parser.add_argument('-mx', '--maxprob', default = False, action = 'store_true', help = 'compute highest-probability solution')
+	parser.add_argument('-t', '--times', default = None, type = int, help = 'sample TNet multiple times')
 	parser.add_argument('-ex', '--extradata', default = False, action = 'store_true', help = 'output a json file with extra output data for further analysis')
 	parser.add_argument('-v', '--version', action = 'version', version = 'You are using %(prog)s 1.0')
 	return parser.parse_args()
